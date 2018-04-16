@@ -1,8 +1,8 @@
 #include <DNSServer.h>
+#include <Update.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <SD.h>
-
 
 DNSServer dnsServer;
 WiFiServer webServer(80);
@@ -109,10 +109,11 @@ void handleWebServer() {
         client.print("Content-type: " + dataType + "\r\n");
         client.print("Content-Length: " + String(filesize) + "\r\n");
         client.print("Connection: close\r\n\r\n");
-      
+ 
      while (dataFile.available()) {
        client.write(dataFile.read());
      }
+
         dataFile.close();
         break;
             }
@@ -158,18 +159,69 @@ void handleUart()
 }
 
 
+void updateFw() {
+  if (SD.exists("/fwupdate.bin")) {
+   File updateFile = SD.open("/fwupdate.bin");
+   if (updateFile) {
+      if(updateFile.isDirectory()){
+         updateFile.close();
+         return;
+      }
+      size_t updateSize = updateFile.size();
+      if (updateSize > 0) {
+         Serial.println("Updating Firmware");
+      if (Update.begin(updateSize)) {      
+      size_t written = Update.writeStream(updateFile);
+      if (written == updateSize) {
+         Serial.println("Written : " + String(written) + " successfully");
+      }
+      else {
+         Serial.println("Written only : " + String(written) + "/" + String(updateSize) + ". Retry?");
+      }
+      if (Update.end()) {
+         if (Update.isFinished()) {
+            Serial.println("Update successfully completed. Rebooting.");
+
+         }
+         else {
+            Serial.println("Update not finished? Something went wrong!");
+         }
+      }
+      else {
+         Serial.println("Error Occurred. Error #: " + String(Update.getError()));
+      }
+   }
+   else
+   {
+      Serial.println("Not enough space to begin update");
+   }   
+      }
+      else {
+         Serial.println("Error, file is empty");
+      }
+      updateFile.close();
+      SD.remove("/fwupdate.bin"); 
+      ESP.restart();  
+   }
+  }
+  else
+  {
+    Serial.println("No update file found");
+  }
+}
+
+
 void setup(void) {
 
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.print("\n");
 
-
   if (SD.begin(SS)) {
   File iniFile;
   
-  if (SD.exists("config.ini")) {
-  iniFile = SD.open("config.ini", FILE_READ);
+  if (SD.exists("/config.ini")) {
+  iniFile = SD.open("/config.ini", FILE_READ);
   if (iniFile) {
   String iniData;
     while (iniFile.available()) {
@@ -208,7 +260,7 @@ void setup(void) {
   }
   else
   {
-    iniFile = SD.open("config.ini", FILE_WRITE);
+    iniFile = SD.open("/config.ini", FILE_WRITE);
     if (iniFile) {
     iniFile.print("\r\nSSID=" + AP_SSID + "\r\nPASSWORD=" + AP_PASS + "\r\n\r\nWEBSERVER_IP=" + Server_IP.toString() + "\r\n\r\nSUBNET_MASK=" + Subnet_Mask.toString() + "\r\n");
     iniFile.close();
@@ -216,6 +268,12 @@ void setup(void) {
   }
 
 
+    Update.onProgress([](unsigned int progress, unsigned int total) {
+     Serial.printf("%u%%\r\n", (progress / (total / 100)));
+    });
+    
+  updateFw();
+  
   Serial.println("SSID: " + AP_SSID);
   Serial.println("Password: " + AP_PASS);
   Serial.print("\n");
