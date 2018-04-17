@@ -4,12 +4,17 @@
 #include <WiFi.h>
 #include <SD.h>
 
+MD5Builder md5;
 DNSServer dnsServer;
 WiFiServer webServer(80);
 HardwareSerial uartSerial(2);  // pins 16(RX) , 17(TX)
 WiFiServer uartServer(24);      
 WiFiClient uartClient;    
 
+
+String firmwareFile = "/fwupdate.bin"; //update filename
+String firmwareVer = "1.03"; 
+int cprog = 0;
 
 //------default settings if config.ini is missing------//
 String AP_SSID = "PS4_WEB_AP";
@@ -160,53 +165,59 @@ void handleUart()
 
 
 void updateFw() {
-  if (SD.exists("/fwupdate.bin")) {
-   File updateFile = SD.open("/fwupdate.bin");
+  if (SD.exists(firmwareFile)) {
+     File updateFile;
+     Serial.println("Update file found");
+     updateFile = SD.open(firmwareFile, FILE_READ);
+ if (updateFile) {
+    size_t updateSize = updateFile.size();
+  if (updateSize > 0) {
+    md5.begin();
+    md5.addStream(updateFile,updateSize);
+    md5.calculate();
+    String md5Hash = md5.toString();
+    Serial.println("Update file hash: " + md5Hash);
+    updateFile.close();
+    updateFile = SD.open(firmwareFile, FILE_READ);
    if (updateFile) {
       if(updateFile.isDirectory()){
          updateFile.close();
          return;
       }
-      size_t updateSize = updateFile.size();
-      if (updateSize > 0) {
-         Serial.println("Updating Firmware");
-      if (Update.begin(updateSize)) {      
-      size_t written = Update.writeStream(updateFile);
-      if (written == updateSize) {
-         Serial.println("Written : " + String(written) + " successfully");
-      }
-      else {
-         Serial.println("Written only : " + String(written) + "/" + String(updateSize) + ". Retry?");
-      }
-      if (Update.end()) {
-         if (Update.isFinished()) {
-            Serial.println("Update successfully completed. Rebooting.");
-
-         }
-         else {
-            Serial.println("Update not finished? Something went wrong!");
-         }
-      }
-      else {
-         Serial.println("Error Occurred. Error #: " + String(Update.getError()));
-      }
-   }
-   else
-   {
-      Serial.println("Not enough space to begin update");
-   }   
-      }
-      else {
-         Serial.println("Error, file is empty");
-      }
+        int md5BufSize = md5Hash.length() + 1;
+        char md5Buf[md5BufSize];
+        md5Hash.toCharArray(md5Buf, md5BufSize) ;
+        Update.setMD5(md5Buf);
+       Serial.println("Updating Firmware...");
+      if (!Update.begin(updateSize)) {   
+      Update.printError(Serial);
       updateFile.close();
-      SD.remove("/fwupdate.bin"); 
+      return;
+      }
+      Update.writeStream(updateFile);
+      if (Update.end()) {
+      Serial.println("Installed firmware hash: " + Update.md5String()); 
+      Serial.println("Update complete");
+      updateFile.close();
+      SD.remove(firmwareFile); 
       ESP.restart();  
+      }
+      else {
+        Serial.println("Update failed");
+        Update.printError(Serial);
+        updateFile.close();  
+      }
+    }
+  }
+   else {
+    Serial.println("Error, file is invalid");
+    updateFile.close(); 
+    SD.remove(firmwareFile);
    }
   }
-  else
-  {
-    Serial.println("No update file found");
+  }
+  else {
+  Serial.println("No update file found");
   }
 }
 
@@ -215,7 +226,7 @@ void setup(void) {
 
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.print("\n");
+  Serial.println("Version: " + firmwareVer);
 
   if (SD.begin(SS)) {
   File iniFile;
@@ -269,7 +280,11 @@ void setup(void) {
 
 
     Update.onProgress([](unsigned int progress, unsigned int total) {
-     Serial.printf("%u%%\r\n", (progress / (total / 100)));
+      int progr = (progress / (total / 100));
+      if (progr >= cprog) {
+        cprog = progr + 10;
+        Serial.println(String(progr) + "%");
+      }
     });
     
   updateFw();
