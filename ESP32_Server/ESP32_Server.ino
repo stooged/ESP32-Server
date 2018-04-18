@@ -1,8 +1,10 @@
+#include "BluetoothSerial.h"
 #include <DNSServer.h>
 #include <Update.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <SD.h>
+
 
 MD5Builder md5;
 DNSServer dnsServer;
@@ -10,6 +12,7 @@ WiFiServer webServer(80);
 HardwareSerial uartSerial(2);  // pins 16(RX) , 17(TX)
 WiFiServer uartServer(24);      
 WiFiClient uartClient;    
+BluetoothSerial SerialBT;
 
 
 String firmwareFile = "/fwupdate.bin"; //update filename
@@ -19,6 +22,7 @@ int cprog = 0;
 //------default settings if config.ini is missing------//
 String AP_SSID = "PS4_WEB_AP";
 String AP_PASS = "password";
+String BT_ID = "PS4_BT";
 IPAddress Server_IP(10,1,1,1);
 IPAddress Subnet_Mask(255,255,255,0);
 //-----------------------------------------------------//
@@ -65,6 +69,13 @@ void handleWebServer() {
         {
            path = split(cData, "POST ", " HTTP");
         }
+        else
+        {
+           client.print("HTTP/1.1 405 Method Not Allowed\r\n");
+           client.print("Content-type: text/plain\r\n");
+           client.print("Connection: close\r\n");
+           break;
+        }
 
   String dataType = "text/plain";
   if (instr(path,"/document/"))
@@ -95,12 +106,12 @@ void handleWebServer() {
     dataType = "image/x-icon";
   } 
 
-
   File dataFile = SD.open(path.c_str());
   if (dataFile.isDirectory()) {
-    path += "/index.htm";
-    dataType = "text/html";
-    dataFile = SD.open(path.c_str());
+      dataFile.close();
+      path = "/index.htm";
+      dataType = "text/html";
+      dataFile = SD.open(path.c_str());
   }
 
   if (!dataFile) {
@@ -114,11 +125,13 @@ void handleWebServer() {
         client.print("Content-type: " + dataType + "\r\n");
         client.print("Content-Length: " + String(filesize) + "\r\n");
         client.print("Connection: close\r\n\r\n");
- 
-     while (dataFile.available()) {
-       client.write(dataFile.read());
-     }
-
+       uint8_t buf[256];  
+     while (dataFile.available() && client.connected()) {
+      int n = dataFile.read(buf, sizeof(buf));
+      for(int i = 0; i < n; i++) {
+        client.write(buf[i]);
+      }
+      }
         dataFile.close();
         break;
             }
@@ -222,6 +235,17 @@ void updateFw() {
 }
 
 
+void handleBt()
+{    //temp test code for android app
+    if (Serial.available()) {
+    SerialBT.write(Serial.read()); 
+  }
+  if (SerialBT.available()) {
+    Serial.write(SerialBT.read());
+  }
+}
+
+
 void setup(void) {
 
   Serial.begin(115200);
@@ -266,14 +290,20 @@ void setup(void) {
     strsIp.trim();
     Subnet_Mask.fromString(strsIp);
    }
-   
+
+   if(instr(iniData,"BLUETOOTH_ID="))
+   {
+    String strsBt = split(iniData,"BLUETOOTH_ID=","\r\n");
+    strsBt.trim();
+    BT_ID = strsBt;
+   }
     }
   }
   else
   {
     iniFile = SD.open("/config.ini", FILE_WRITE);
     if (iniFile) {
-    iniFile.print("\r\nSSID=" + AP_SSID + "\r\nPASSWORD=" + AP_PASS + "\r\n\r\nWEBSERVER_IP=" + Server_IP.toString() + "\r\n\r\nSUBNET_MASK=" + Subnet_Mask.toString() + "\r\n");
+    iniFile.print("\r\nSSID=" + AP_SSID + "\r\nPASSWORD=" + AP_PASS + "\r\n\r\nWEBSERVER_IP=" + Server_IP.toString() + "\r\n\r\nSUBNET_MASK=" + Subnet_Mask.toString() + "\r\n\r\nBLUETOOTH_ID=" + BT_ID + "\r\n");
     iniFile.close();
     }
   }
@@ -295,8 +325,8 @@ void setup(void) {
   Serial.println("WEB Server IP: " + Server_IP.toString());
   Serial.println("Subnet: " + Subnet_Mask.toString());
   Serial.println("DNS Server IP: " + Server_IP.toString());
+  Serial.println("Blutetooth ID: " + BT_ID);
   Serial.print("\n\n");
-
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID.c_str(), AP_PASS.c_str());
@@ -331,6 +361,10 @@ void setup(void) {
   uartSerial.begin(115200);
   uartServer.begin();
   Serial.println("UART server started");
+
+
+  SerialBT.begin(BT_ID); 
+  Serial.println("Bluetooth enabled");
   
 }
 
@@ -340,5 +374,6 @@ void loop(void) {
   dnsServer.processNextRequest();
   handleWebServer();
   handleUart();
+  handleBt();
 }
 
